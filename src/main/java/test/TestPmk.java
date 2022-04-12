@@ -1,11 +1,13 @@
 package test;
 
 import netty.httpsserver.Formatter;
+import netty.httpsserver.GmSSLEngine;
 import netty.httpsserver.SM2Util;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.security.InvalidKeyException;
@@ -51,7 +53,7 @@ public class TestPmk {
 
     public static byte[] hexStringToByteArray(String s) {
         int len = s.length();
-        System.out.println(len);
+        //System.out.println(len);
         byte[] data = new byte[len / 2];
         for (int i = 0; i < len; i += 2) {
             data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
@@ -83,34 +85,19 @@ public class TestPmk {
     }
 
     public static void main(String[] args) throws GeneralSecurityException, IOException {
-        SM2Util sm2 = new SM2Util();
-        sm2.loadPrivateKey(PRIVATE_KEY_FILE);
-        if(!test(sm2)) return;
+        byte[] pms = hexStringToByteArray("01017a57183fe024794f9909061b73d2bf8bd600b0abc0d6dc6e4e11202ffe3a75b708af9488b89235161c3ef8381ad3");
+        byte[] clientRandom = hexStringToByteArray("403cc1b00baab1e6e5c060281a2f9f2f90ed750c709ca1f1fdeafde6247fea4d");
+        byte[] serverRandom = hexStringToByteArray("07dff5f4a9c898f1e83de6f1b0fd5722e4e77cae0985e568275963f9bc1fb732");
 
-        byte[] packetData = hexStringToByteArray(payload);
-        System.out.println("data len: " + packetData.length);
+        ByteArrayOutputStream bis = new ByteArrayOutputStream();
+        bis.write(clientRandom);
+        bis.write(serverRandom);
+        byte[] randoms = bis.toByteArray();
+        bis.close();
 
-        try {
-            byte[] out = sm2.prvKetDecrypt(packetData);
-            System.out.println(Formatter.bytesToHex(out));
-            return;
-        } catch (NoSuchPaddingException | NoSuchAlgorithmException | InvalidKeySpecException | InvalidKeyException | BadPaddingException | IllegalBlockSizeException e) {
-            System.out.println("a fail");
-        }
+        byte[] ms = new byte[48];
+        GmSSLEngine.PRF(pms, "master secret".getBytes(), randoms, ms);
 
-        try {
-            byte[] out = sm2.prvKetDecrypt(changeC1C3C2ToC1C2C3(packetData));
-            System.out.println(Formatter.bytesToHex(out));
-            return;
-        } catch (NoSuchPaddingException | NoSuchAlgorithmException | InvalidKeySpecException | InvalidKeyException | BadPaddingException | IllegalBlockSizeException e) {
-            System.out.println("b fail");
-        }
-
-        try {
-            byte[] out = sm2.prvKetDecrypt(changeC1C2C3ToC1C3C2(packetData));
-            System.out.println(Formatter.bytesToHex(out));
-        } catch (NoSuchPaddingException | NoSuchAlgorithmException | InvalidKeySpecException | InvalidKeyException | BadPaddingException | IllegalBlockSizeException e) {
-            System.out.println("c fail");
-        }
+        System.out.println(Formatter.bytesToHex(ms));
     }
 }

@@ -52,7 +52,7 @@ public class SSLHandlerProvider {
             algorithm = ALGORITHM_SUN_X509;
         }
         KeyStore ks = null;
-        InputStream inputStream=null;
+        InputStream inputStream = null;
         try {
             inputStream = new FileInputStream(KEYSTORE);
             ks = KeyStore.getInstance(KEYSTORE_TYPE);

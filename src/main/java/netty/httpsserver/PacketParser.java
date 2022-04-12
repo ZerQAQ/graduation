@@ -24,10 +24,11 @@ public class PacketParser {
         public static final byte APPLICATION_DATA = 23;
     }
 
-    final static int GMSSL_VERSION = 0x0101;
+    final static short GMSSL_VERSION = 0x0101;
+    final static int GMSSL_HEADER_LENGTH = 5;
 
-    public static int getPacketType(ByteBuffer b){
-        int type = b.get(b.position());
+    public static byte getPacketType(ByteBuffer b){
+        byte type = b.get(b.position());
         int version = b.getShort(b.position() + 1);
         if (version != GMSSL_VERSION) {
             System.out.println("unsupported protocol version " + String.format("0x%04x", version));
@@ -53,7 +54,6 @@ public class PacketParser {
         public static final byte SERVER_KEY_EXCHANGE = 12;
         public static final byte SERVER_HELLO_DONE = 14;
         public static final byte CLIENT_KEY_EXCHANGE = 16;
-        public static final byte CHANGE_CIPHER_SPEC = 20;
     }
 
     public static int getHandshakeType(ByteBuffer b) {
@@ -330,5 +330,35 @@ public class PacketParser {
             System.out.println("text: " + text);
         }
 */
+    }
+
+    public static class ChangeCipherSpec{
+        public static void fromByteBuffer(ByteBuffer b){
+            b.position(b.position() + 6);
+        }
+        public static int toByte(ByteBuffer b){
+            b.putInt(0x14010100);
+            b.putShort((short) 0x0101);
+            return 6;
+        }
+    }
+
+    public static class Finished{
+        byte[] payload;
+        public static Finished fromByteBuffer(ByteBuffer b){
+            b.position(b.position() + 3);
+            int length = b.getShort();
+            Finished ret = new Finished();
+            ret.payload = new byte[length];
+            b.get(ret.payload);
+            return ret;
+        }
+
+        public int toByte(ByteBuffer b){
+            b.putInt(0x16010100);
+            b.put((byte) 0x50);
+            b.put(payload);
+            return 0x55;
+        }
     }
 }
