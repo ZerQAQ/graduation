@@ -1,25 +1,18 @@
 package netty.httpsserver;
 
-import org.bouncycastle.asn1.ASN1InputStream;
-import org.bouncycastle.asn1.ASN1Primitive;
-import org.bouncycastle.asn1.ASN1Sequence;
-import org.bouncycastle.asn1.ASN1SequenceParser;
-
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
 import java.util.Vector;
 
-import static netty.httpsserver.PacketParser.HandshakeType.SERVER_HELLO;
-
 public class PacketParser {
 
     public static class PacketType {
         public static final byte CHANGE_CIPHER_SPEC = 20;
+        public static final byte ALTER = 21;
         public static final byte HANDSHAKE = 22;
         public static final byte APPLICATION_DATA = 23;
     }
@@ -333,32 +326,39 @@ public class PacketParser {
     }
 
     public static class ChangeCipherSpec{
+        public static final int SIZE = 1;
         public static void fromByteBuffer(ByteBuffer b){
             b.position(b.position() + 6);
         }
         public static int toByte(ByteBuffer b){
-            b.putInt(0x14010100);
-            b.putShort((short) 0x0101);
-            return 6;
+            putPacketHeader(b, PacketType.CHANGE_CIPHER_SPEC, SIZE);
+            b.put((byte) 1);
+            return SIZE + 5;
         }
     }
 
-    public static class Finished{
+    public static class EncrpyedPacket {
+        byte type;
         byte[] payload;
-        public static Finished fromByteBuffer(ByteBuffer b){
+
+        public EncrpyedPacket(byte type, byte[] payload) {
+            this.type = type;
+            this.payload = payload;
+        }
+
+        public static EncrpyedPacket fromByteBuffer(ByteBuffer b){
+            byte tp = getPacketType(b);
             b.position(b.position() + 3);
             int length = b.getShort();
-            Finished ret = new Finished();
-            ret.payload = new byte[length];
+            EncrpyedPacket ret = new EncrpyedPacket(tp, new byte[length]);
             b.get(ret.payload);
             return ret;
         }
 
         public int toByte(ByteBuffer b){
-            b.putInt(0x16010100);
-            b.put((byte) 0x50);
+            putPacketHeader(b, type, payload.length);
             b.put(payload);
-            return 0x55;
+            return payload.length + 5;
         }
     }
 }

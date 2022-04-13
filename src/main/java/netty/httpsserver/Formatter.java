@@ -19,4 +19,19 @@ public class Formatter {
         }
         return res.toString();
     }
+
+    public static void logAccept(byte[] b){
+        log(b, ">>> ");
+    }
+
+    public static void logSend(byte[] b){
+        log(b, "<<< ");
+    }
+
+    public static void log(byte[] b, String prefix){
+        String ret = prefix + Formatter.bytesToHex(b) + "\n" +
+                prefix +
+                (new String(b)).replace("\n", "\n" + prefix);
+        System.out.println(ret);
+    }
 }

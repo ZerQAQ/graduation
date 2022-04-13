@@ -3,6 +3,7 @@ package netty.httpsserver;
 import org.bouncycastle.crypto.digests.SM3Digest;
 import org.bouncycastle.crypto.macs.HMac;
 import org.bouncycastle.crypto.params.KeyParameter;
+import org.bouncycastle.util.Pack;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.IllegalBlockSizeException;
@@ -52,7 +53,7 @@ public class GmSSLEngine extends SSLEngine {
     private PacketParser.ServerHello serverHello;
     private PacketParser.Certificate certificate;
     private PacketParser.ClientKeyExchange clientKeyExchange;
-    private PacketParser.Finished clientFinished, serverFinished;
+    private PacketParser.EncrpyedPacket clientFinished, serverFinished;
 
     private final String[] CertFilesPath;
 
@@ -84,18 +85,18 @@ public class GmSSLEngine extends SSLEngine {
         sequenceNumber = acknowledgeNumber = 0;
     }
 
-    private byte[] encrypt(byte[] text, byte packetType) throws Exception {
+    private byte[] encrypt(PacketParser.EncrpyedPacket packet) throws Exception {
         byte[] iv = new byte[SM4_KEY_SIZE];
         (new SecureRandom()).nextBytes(iv);
 
-        ByteBuffer HMACdata = ByteBuffer.allocateDirect(8 + 1 + 2 + 2 + text.length);
+        ByteBuffer HMACdata = ByteBuffer.allocateDirect(8 + 1 + 2 + 2 + packet.payload.length);
         HMACdata.putLong(sequenceNumber);
-        HMACdata.put(packetType);
+        HMACdata.put(packet.type);
         HMACdata.putShort(PacketParser.GMSSL_VERSION);
-        HMACdata.putShort((short)text.length);
-        HMACdata.put(text);
+        HMACdata.putShort((short)packet.payload.length);
+        HMACdata.put(packet.payload);
         HMACdata.position(0);
-        byte[] HMACdataBytes = new byte[HMACdata.remaining()];
+        byte[] HMACdataBytes = new byte[8 + 1 + 2 + 2 + packet.payload.length];
         HMACdata.get(HMACdataBytes);
 
         byte[] MAC = new byte[HASH_SIZE];
@@ -103,17 +104,18 @@ public class GmSSLEngine extends SSLEngine {
         hMac.init(new KeyParameter(serverWriteMACSecret));
         HMAC(hMac, HMACdataBytes, MAC);
 
-        int paddingLength = text.length % 16;
+        int paddingLength = packet.payload.length % 16;
         if(paddingLength == 0) paddingLength = 16;
         byte[] padding = new byte[paddingLength];
         Arrays.fill(padding, (byte) (paddingLength - 1));
 
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        bos.write(text);
+        bos.write(packet.payload);
         bos.write(MAC);
         bos.write(padding);
         byte[] block = bos.toByteArray();
         bos.close();
+        System.out.println("block in encrypt func: " + Formatter.bytesToHex(block));
 
         byte[] encryptedBlock = SM4Util.encrypt(block, serverWriteKey, iv);
         bos = new ByteArrayOutputStream();
@@ -122,14 +124,17 @@ public class GmSSLEngine extends SSLEngine {
         byte[] ret = bos.toByteArray();
         bos.close();
 
+        sequenceNumber++;
+
+        System.out.println("sf payload: " + Formatter.bytesToHex(ret));
         return ret;
     }
 
-    private byte[] decrypt(byte[] payload, byte packetType) throws Exception {
+    private byte[] decrypt(PacketParser.EncrpyedPacket packet) throws Exception {
         byte[] iv = new byte[SM4_KEY_SIZE];
-        System.arraycopy(payload, 0, iv, 0, SM4_KEY_SIZE);
-        byte[] data = new byte[payload.length - SM4_KEY_SIZE];
-        System.arraycopy(payload, SM4_KEY_SIZE, data, 0, payload.length - SM4_KEY_SIZE);
+        System.arraycopy(packet.payload, 0, iv, 0, SM4_KEY_SIZE);
+        byte[] data = new byte[packet.payload.length - SM4_KEY_SIZE];
+        System.arraycopy(packet.payload, SM4_KEY_SIZE, data, 0, packet.payload.length - SM4_KEY_SIZE);
         byte[] block = SM4Util.decrypt(data, clientWriteKey, iv);
 
         System.out.println("block: " + Formatter.bytesToHex(block));
@@ -143,10 +148,12 @@ public class GmSSLEngine extends SSLEngine {
 
         byte[] text = new byte[ind];
         System.arraycopy(block, 0, text, 0, ind);
+        //System.out.println("block: " + Formatter.bytesToHex(block));
+        //System.out.println("text: " + Formatter.bytesToHex(text));
 
         ByteBuffer HMACdata = ByteBuffer.allocateDirect(8 + 1 + 2 + 2 + text.length);
         HMACdata.putLong(acknowledgeNumber);
-        HMACdata.put(packetType);
+        HMACdata.put(packet.type);
         HMACdata.putShort(PacketParser.GMSSL_VERSION);
         HMACdata.putShort((short)text.length);
         HMACdata.put(text);
@@ -158,6 +165,10 @@ public class GmSSLEngine extends SSLEngine {
         HMac hMac = new HMac(new SM3Digest());
         hMac.init(new KeyParameter(clientWriteMACSecret));
         HMAC(hMac, HMACdataBytes, localMAC);
+
+        //acknowledgeNumber += payload.length;
+        System.out.println("text: " + Formatter.bytesToHex(text));
+        acknowledgeNumber++;
 
         if(Arrays.equals(localMAC, textMAC)) return text;
         else {
@@ -267,14 +278,27 @@ public class GmSSLEngine extends SSLEngine {
         System.out.println("key expand finish");
     }
 
+    public SSLEngineResult wrapSingle(ByteBuffer src, ByteBuffer dst) throws Exception {
+        byte[] data = new byte[src.remaining()];
+        src.get(data);
+        PacketParser.EncrpyedPacket packet =
+                new PacketParser.EncrpyedPacket(PacketParser.PacketType.APPLICATION_DATA, data);
+        packet.payload = encrypt(packet);
+        int byteProduced = packet.toByte(dst);
+        return new SSLEngineResult(
+                SSLEngineResult.Status.OK,
+                SSLEngineResult.HandshakeStatus.NEED_WRAP,
+                data.length, byteProduced, sequenceNumber
+        );
+    }
+
     @Override
     public SSLEngineResult wrap(ByteBuffer [] srcs, int offset,
                                 int length, ByteBuffer dst) throws SSLException {
         System.out.println("[call]wrap");
         System.out.println("[wrap]" + handshakeStatus);
-        final int byteProduced;
         switch(handshakeStatus){
-            case PREPARE_SERVER_HELLO:
+            case PREPARE_SERVER_HELLO: {
                 serverHello = new PacketParser.ServerHello();
                 SecureRandom random = new SecureRandom();
                 serverHello.random = new byte[32];
@@ -284,12 +308,12 @@ public class GmSSLEngine extends SSLEngine {
                 random.nextBytes(serverHello.sessionId);
 
                 serverHello.cipherSuite = -1;
-                for (int cipherSuite : clientHello.cipherSuites){
-                    if(cipherSuite == PacketParser.CipherSuite.ECC_SM4_SM3){
+                for (int cipherSuite : clientHello.cipherSuites) {
+                    if (cipherSuite == PacketParser.CipherSuite.ECC_SM4_SM3) {
                         serverHello.cipherSuite = cipherSuite;
                     }
                 }
-                if(serverHello.cipherSuite == -1){
+                if (serverHello.cipherSuite == -1) {
                     System.out.println("no supported ciphersuite");
                     handshakeStatus = WAIT_CLIENT_HELLO;
                     return new SSLEngineResult(
@@ -300,12 +324,12 @@ public class GmSSLEngine extends SSLEngine {
                 }
 
                 serverHello.compressMethod = -1;
-                for (int compressMethod : clientHello.compressMethods){
-                    if(compressMethod == PacketParser.CompressMethod.NULL){
+                for (int compressMethod : clientHello.compressMethods) {
+                    if (compressMethod == PacketParser.CompressMethod.NULL) {
                         serverHello.compressMethod = compressMethod;
                     }
                 }
-                if(serverHello.compressMethod == -1){
+                if (serverHello.compressMethod == -1) {
                     System.out.println("no supported compress method");
                     handshakeStatus = WAIT_CLIENT_HELLO;
                     return new SSLEngineResult(
@@ -315,7 +339,7 @@ public class GmSSLEngine extends SSLEngine {
                     );
                 }
 
-                byteProduced = serverHello.toByte(dst);
+                int byteProduced = serverHello.toByte(dst);
                 appendToHandshakeMsg(dst, byteProduced);
 
                 System.out.println("send server hello");
@@ -326,11 +350,12 @@ public class GmSSLEngine extends SSLEngine {
                         SSLEngineResult.HandshakeStatus.NEED_WRAP,
                         0, byteProduced, 0
                 );
-            case PREPARE_CERTIFICATE:
+            }
+            case PREPARE_CERTIFICATE: {
                 certificate = new PacketParser.Certificate();
                 try {
                     CertificateFactory factory = CertificateFactory.getInstance("X.509", "BC");
-                    for(String filePath : CertFilesPath){
+                    for (String filePath : CertFilesPath) {
                         try {
                             FileInputStream f = new FileInputStream(filePath);
                             certificate.addCert((X509Certificate) factory.generateCertificate(f));
@@ -342,7 +367,7 @@ public class GmSSLEngine extends SSLEngine {
                     e.printStackTrace();
                 }
 
-                byteProduced = certificate.toByte(dst);
+                int byteProduced = certificate.toByte(dst);
                 appendToHandshakeMsg(dst, byteProduced);
 
                 System.out.println("send certificate");
@@ -353,8 +378,9 @@ public class GmSSLEngine extends SSLEngine {
                         SSLEngineResult.HandshakeStatus.NEED_WRAP,
                         0, byteProduced, 0
                 );
-            case PREPARE_SERVER_HELLO_DONE:
-                byteProduced = PacketParser.ServerHelloDone.toByte(dst);
+            }
+            case PREPARE_SERVER_HELLO_DONE: {
+                int byteProduced = PacketParser.ServerHelloDone.toByte(dst);
                 appendToHandshakeMsg(dst, byteProduced);
 
                 handshakeStatus = WAIT_CLIENT_KEY_EXCHANGE;
@@ -364,8 +390,9 @@ public class GmSSLEngine extends SSLEngine {
                         SSLEngineResult.HandshakeStatus.NEED_UNWRAP,
                         0, byteProduced, 0
                 );
-            case PREPARE_CHANGE_CIPHER_SPEC:
-                byteProduced = PacketParser.ChangeCipherSpec.toByte(dst);
+            }
+            case PREPARE_CHANGE_CIPHER_SPEC: {
+                int byteProduced = PacketParser.ChangeCipherSpec.toByte(dst);
 
                 handshakeStatus = PREPARE_FINISHED;
 
@@ -376,7 +403,8 @@ public class GmSSLEngine extends SSLEngine {
                         SSLEngineResult.HandshakeStatus.NEED_WRAP,
                         0, byteProduced, 0
                 );
-            case PREPARE_FINISHED:
+            }
+            case PREPARE_FINISHED: {
                 byte[] verifyData = new byte[12];
                 PRF(masterSecret, "server finished".getBytes(), getHanshakeMsgHash(), verifyData);
 
@@ -386,14 +414,30 @@ public class GmSSLEngine extends SSLEngine {
                 text[3] = 0x0C;
                 System.arraycopy(verifyData, 0, text, 4, 12);
 
-                serverFinished = new PacketParser.Finished();
+                serverFinished = new PacketParser.EncrpyedPacket(PacketParser.PacketType.HANDSHAKE, text);
                 try {
-                    serverFinished.payload = encrypt(text, PacketParser.PacketType.HANDSHAKE);
+                    serverFinished.payload = encrypt(serverFinished);
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
 
-                byteProduced = serverFinished.toByte(dst);
+                byte[] iv = new byte[SM4_KEY_SIZE];
+                byte[] encryptedBlock = new byte[serverFinished.payload.length - SM4_KEY_SIZE];
+                ByteBuffer t = ByteBuffer.wrap(serverFinished.payload);
+                t.get(iv);
+                t.get(encryptedBlock);
+                System.out.println("iv: " + Formatter.bytesToHex(iv));
+                System.out.println("encrypted block: " + Formatter.bytesToHex(encryptedBlock));
+
+                byte[] block = new byte[0];
+                try {
+                    block = SM4Util.decrypt(encryptedBlock, serverWriteKey, iv);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                System.out.println("sf block: " + Formatter.bytesToHex(block));
+
+                int byteProduced = serverFinished.toByte(dst);
 
                 handshakeStatus = OK;
 
@@ -404,6 +448,34 @@ public class GmSSLEngine extends SSLEngine {
                         SSLEngineResult.HandshakeStatus.FINISHED,
                         0, byteProduced, 0
                 );
+            }
+            case OK: {
+                int byteProduced, byteConsume;
+                byteProduced = byteConsume = 0;
+                for (int i = offset; i < offset + length; i++){
+
+                    SSLEngineResult res = new SSLEngineResult(
+                            SSLEngineResult.Status.OK,
+                            SSLEngineResult.HandshakeStatus.FINISHED,
+                            0, 0, sequenceNumber
+                    );
+
+                    try {
+                        res = wrapSingle(srcs[i], dst);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+
+                    byteConsume += res.bytesConsumed();
+                    byteProduced += res.bytesProduced();
+                }
+
+                return new SSLEngineResult(
+                        SSLEngineResult.Status.OK,
+                        SSLEngineResult.HandshakeStatus.FINISHED,
+                        byteConsume, byteProduced, sequenceNumber
+                );
+            }
             default:
                 return new SSLEngineResult(
                         SSLEngineResult.Status.OK,
@@ -422,7 +494,7 @@ public class GmSSLEngine extends SSLEngine {
                         PacketParser.getHandshakeType(src) == PacketParser.HandshakeType.CLIENT_HELLO){
                     System.out.println("accept client hello");
                     clientHello = PacketParser.ClientHello.fromByteBuffer(src);
-                    System.out.println(clientHello);
+                    //System.out.println(clientHello);
                     handshakeStatus = PREPARE_SERVER_HELLO;
 
                     appendToHandshakeMsg(src, src.position());
@@ -474,10 +546,9 @@ public class GmSSLEngine extends SSLEngine {
                 break;
             case WAIT_FINISHED:
                 if (PacketParser.getPacketType(src) == PacketParser.PacketType.HANDSHAKE){
-                    clientFinished = PacketParser.Finished.fromByteBuffer(src);
+                    clientFinished = PacketParser.EncrpyedPacket.fromByteBuffer(src);
 
-                    byte[] text = decrypt(clientFinished.payload, PacketParser.PacketType.HANDSHAKE);
-                    handshakeMsg.put(text);
+                    byte[] text = decrypt(clientFinished);
 
                     byte[] finishedMsg = new byte[12];
                     System.arraycopy(text, 4, finishedMsg, 0, 12);
@@ -485,8 +556,8 @@ public class GmSSLEngine extends SSLEngine {
                     byte[] verifyData = new byte[12];
                     PRF(masterSecret, "client finished".getBytes(), getHanshakeMsgHash(), verifyData);
 
-                    System.out.println("finishedMsg: " + Formatter.bytesToHex(finishedMsg));
-                    System.out.println("verify data: " + Formatter.bytesToHex(verifyData));
+                    //System.out.println("finishedMsg: " + Formatter.bytesToHex(finishedMsg));
+                    //System.out.println("verify data: " + Formatter.bytesToHex(verifyData));
                     System.out.println("accept client finished");
 
                     if(Arrays.equals(finishedMsg, verifyData)){
@@ -497,18 +568,36 @@ public class GmSSLEngine extends SSLEngine {
                         throw new SSLException("client finished verify fail");
                     }
 
+                    handshakeMsg.put(text);
+
                     return new SSLEngineResult(
                             SSLEngineResult.Status.OK,
                             SSLEngineResult.HandshakeStatus.NEED_WRAP,
-                            src.position(), 0, 0
+                            src.position(), 0, sequenceNumber
                     );
                 }
                 break;
             case OK:
-                byte tp = PacketParser.getPacketType(src);
-                PacketParser.Finished f = PacketParser.Finished.fromByteBuffer(src);
-                byte[] d = decrypt(f.payload, tp);
-                System.out.println("alter: " + Formatter.bytesToHex(d));
+                PacketParser.EncrpyedPacket packet = PacketParser.EncrpyedPacket.fromByteBuffer(src);
+                byte[] data = decrypt(packet);
+                if(packet.type == PacketParser.PacketType.APPLICATION_DATA){
+                    System.out.println("recive application data:");
+                    Formatter.logAccept(data);
+                    dst.put(data);
+                    return new SSLEngineResult(
+                            SSLEngineResult.Status.OK,
+                            SSLEngineResult.HandshakeStatus.FINISHED,
+                            src.position(), data.length, sequenceNumber
+                    );
+                } else if(packet.type == PacketParser.PacketType.ALTER){
+                    System.out.println("recive alter:");
+                    Formatter.logAccept(data);
+                    return new SSLEngineResult(
+                            SSLEngineResult.Status.OK,
+                            SSLEngineResult.HandshakeStatus.FINISHED,
+                            src.position(), 0, sequenceNumber
+                    );
+                }
             default:
                 break;
         }

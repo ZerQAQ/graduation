@@ -3,6 +3,7 @@ package test;
 import netty.httpsserver.Formatter;
 import netty.httpsserver.GmSSLEngine;
 import netty.httpsserver.SM2Util;
+import netty.httpsserver.SM4Util;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.IllegalBlockSizeException;
@@ -12,6 +13,7 @@ import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.security.spec.InvalidKeySpecException;
 
 public class TestPmk {
@@ -84,20 +86,17 @@ public class TestPmk {
         return true;
     }
 
-    public static void main(String[] args) throws GeneralSecurityException, IOException {
-        byte[] pms = hexStringToByteArray("01017a57183fe024794f9909061b73d2bf8bd600b0abc0d6dc6e4e11202ffe3a75b708af9488b89235161c3ef8381ad3");
-        byte[] clientRandom = hexStringToByteArray("403cc1b00baab1e6e5c060281a2f9f2f90ed750c709ca1f1fdeafde6247fea4d");
-        byte[] serverRandom = hexStringToByteArray("07dff5f4a9c898f1e83de6f1b0fd5722e4e77cae0985e568275963f9bc1fb732");
+    public static void main(String[] args) throws Exception {
+        byte[] key = new byte[SM4Util.getBlockSize()];
+        (new SecureRandom()).nextBytes(key);
+        byte[] iv = new byte[SM4Util.getBlockSize()];
+        (new SecureRandom()).nextBytes(iv);
+        byte[] data = new byte[SM4Util.getBlockSize() * 4];
+        (new SecureRandom()).nextBytes(data);
 
-        ByteArrayOutputStream bis = new ByteArrayOutputStream();
-        bis.write(clientRandom);
-        bis.write(serverRandom);
-        byte[] randoms = bis.toByteArray();
-        bis.close();
-
-        byte[] ms = new byte[48];
-        GmSSLEngine.PRF(pms, "master secret".getBytes(), randoms, ms);
-
-        System.out.println(Formatter.bytesToHex(ms));
+        System.out.println("bef: " + Formatter.bytesToHex(data));
+        data = SM4Util.encrypt(data, key, iv);
+        data = SM4Util.decrypt(data, key, iv);
+        System.out.println("aft: " + Formatter.bytesToHex(data));
     }
 }

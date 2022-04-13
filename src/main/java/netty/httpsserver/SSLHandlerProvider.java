@@ -84,7 +84,6 @@ public class SSLHandlerProvider {
             serverSSLContext = SSLContext.getInstance(PROTOCOL);
             serverSSLContext.init(keyManagers, trustManagers, null);
 
-
         } catch (Exception e) {
             logger.error("Failed to initialize the server-side SSLContext",e);
         }
