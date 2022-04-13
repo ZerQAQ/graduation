@@ -115,7 +115,7 @@ public class GmSSLEngine extends SSLEngine {
         bos.write(padding);
         byte[] block = bos.toByteArray();
         bos.close();
-        System.out.println("block in encrypt func: " + Formatter.bytesToHex(block));
+        // System.out.println("block in encrypt func: " + Formatter.bytesToHex(block));
 
         byte[] encryptedBlock = SM4Util.encrypt(block, serverWriteKey, iv);
         bos = new ByteArrayOutputStream();
@@ -126,7 +126,6 @@ public class GmSSLEngine extends SSLEngine {
 
         sequenceNumber++;
 
-        System.out.println("sf payload: " + Formatter.bytesToHex(ret));
         return ret;
     }
 
@@ -137,7 +136,7 @@ public class GmSSLEngine extends SSLEngine {
         System.arraycopy(packet.payload, SM4_KEY_SIZE, data, 0, packet.payload.length - SM4_KEY_SIZE);
         byte[] block = SM4Util.decrypt(data, clientWriteKey, iv);
 
-        System.out.println("block: " + Formatter.bytesToHex(block));
+        //System.out.println("block: " + Formatter.bytesToHex(block));
 
         int ind = block.length;
         ind -= block[block.length - 1] + 1;
@@ -167,7 +166,7 @@ public class GmSSLEngine extends SSLEngine {
         HMAC(hMac, HMACdataBytes, localMAC);
 
         //acknowledgeNumber += payload.length;
-        System.out.println("text: " + Formatter.bytesToHex(text));
+        //System.out.println("text: " + Formatter.bytesToHex(text));
         acknowledgeNumber++;
 
         if(Arrays.equals(localMAC, textMAC)) return text;
@@ -285,6 +284,9 @@ public class GmSSLEngine extends SSLEngine {
                 new PacketParser.EncrpyedPacket(PacketParser.PacketType.APPLICATION_DATA, data);
         packet.payload = encrypt(packet);
         int byteProduced = packet.toByte(dst);
+
+        Formatter.logSend(data);
+
         return new SSLEngineResult(
                 SSLEngineResult.Status.OK,
                 SSLEngineResult.HandshakeStatus.NEED_WRAP,
@@ -581,7 +583,7 @@ public class GmSSLEngine extends SSLEngine {
                 PacketParser.EncrpyedPacket packet = PacketParser.EncrpyedPacket.fromByteBuffer(src);
                 byte[] data = decrypt(packet);
                 if(packet.type == PacketParser.PacketType.APPLICATION_DATA){
-                    System.out.println("recive application data:");
+                    System.out.println("recive application data");
                     Formatter.logAccept(data);
                     dst.put(data);
                     return new SSLEngineResult(
@@ -590,7 +592,7 @@ public class GmSSLEngine extends SSLEngine {
                             src.position(), data.length, sequenceNumber
                     );
                 } else if(packet.type == PacketParser.PacketType.ALTER){
-                    System.out.println("recive alter:");
+                    System.out.println("recive alter");
                     Formatter.logAccept(data);
                     return new SSLEngineResult(
                             SSLEngineResult.Status.OK,
